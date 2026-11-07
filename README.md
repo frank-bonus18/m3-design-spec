@@ -76,6 +76,19 @@ cp -a m3-design-spec /skills/
 chmod +x /skills/m3-design-spec/scripts/*
 ```
 
+### 连不上 github.com 怎么办
+
+某些网络环境下 `github.com:443` 会被阻断 —— TCP 能连上，TLS 握手挂死，`git clone` 一直超时，但 `api.github.com` 正常。
+
+这种情况下用网页下载：
+
+1. 打开仓库页 → 绿色 **Code** 按钮 → **Download ZIP**
+2. 解压，得到 `m3-design-spec-main/` 目录
+3. 按上面的「手动安装」三步走（把 `m3-design-spec-main` 里的 `m3-design-spec/` 复制到 `/skills/`）
+
+也支持只下某个文件：浏览器打开
+`https://raw.githubusercontent.com/<owner>/<repo>/main/<路径>` 即可。
+
 ### 装到别的位置
 
 ```bash
