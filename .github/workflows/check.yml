@@ -1,0 +1,58 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 参考实现路径
+        run: echo "ASSET=m3-design-spec/assets/m3-component-library.html" >> "$GITHUB_ENV"
+
+      - name: 静态校验
+        run: python3 m3-design-spec/scripts/check_m3_html.py "$ASSET"
+
+      - name: 运行时执行
+        run: node m3-design-spec/scripts/dom_harness.js "$ASSET"
+
+      - name: 键盘可达性审计
+        run: node m3-design-spec/scripts/audit_keyboard.js "$ASSET"
+
+      - name: 行为回归
+        run: node m3-design-spec/scripts/regression_tests.js "$ASSET"
+
+      - name: 检查器防篡改自检
+        run: python3 m3-design-spec/scripts/selfcheck.py
+
+      - name: docs 与技能资产是否同步
+        run: |
+          if ! cmp -s docs/index.html "$ASSET"; then
+            echo "::error::docs/index.html 与技能资产不一致，请运行 ./tools/sync-docs.sh"
+            exit 1
+          fi
+          echo "✓ 在线演示与技能资产一致"
+
+      - name: 脚本可执行位
+        run: |
+          fail=0
+          for f in install.sh tools/sync-docs.sh m3-design-spec/scripts/*; do
+            if [ ! -x "$f" ]; then
+              echo "::error::$f 缺少可执行位"
+              fail=1
+            fi
+          done
+          exit $fail
