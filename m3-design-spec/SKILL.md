@@ -189,6 +189,42 @@ End-to-end assertions across theme switching, all overlay types (focus trap and 
 
 Treat it as a template: adapt selectors to the page under test, then keep it as the smoke test.
 
+### Anti-tamper self-check
+
+`/skills/m3-design-spec/scripts/selfcheck.py`
+
+```
+python3 /skills/m3-design-spec/scripts/selfcheck.py [--verbose]
+```
+
+Mutation test for the checkers themselves. It applies 13 known defects — a dropped dark token, hardcoded hex, missing `min-width`, blocked zoom, missing skip link, emoji icon, empty `aria-label`, an empty `catch` swallowing init errors, environment sniffing, a `tabindex` with no role, broken JS, an unfocusable click target, broken date roving — and asserts the relevant checker fails on each. A clean baseline must pass all four.
+
+Run this whenever a checker is edited. If a rule is quietly removed, the mutation it used to catch will slip through and this script goes red. That is the only mechanism that keeps "PASS" meaningful over time.
+
+Exit 0 = every mutation caught and the baseline is clean. Exit 1 = something slipped through, meaning a rule was weakened.
+
+## Do not game the checks
+
+The checkers can be fooled. These patterns are detected and reported as failures, so do not use them:
+
+- **Wrapping initialisation in `try { … } catch (e) {}`.** It makes the runtime harness report "no exception" while the page is silently broken. Guard individual benign calls (`focus`, `setPointerCapture`, `setSelectionRange`) if you must — those are recognised as benign — but never swallow a whole init block.
+- **Sniffing the environment.** `navigator.userAgent`, `typeof process`, `process.env`, or the harness's own variable names. The harness uses a real Chrome Android UA and shadows `process` / `require` / `module` / `global`, so honest code sees nothing unusual; code that branches on the test environment is reported.
+- **Sprinkling `tabindex="0"` on `<div>`/`<span>` without a `role`.** It satisfies a "is it focusable" check while giving screen readers nothing and keyboard users no way to activate it. Use a real `<button>`, or add `role` plus an Enter/Space handler.
+- **`aria-label=""`.** The attribute exists but carries no name. The checker requires a non-empty value.
+
+None of this makes verification airtight — see the limits below.
+
+## What these checks cannot prove
+
+Be honest with the user about this.
+
+- The static checker reads patterns, not intent. Novel ways of faking behaviour are not covered.
+- The runtime harness is not a browser: no layout, no real `getBoundingClientRect`, no observers. It verifies logic and exceptions only.
+- The regression suite asserts what it asserts. A page built specifically to satisfy those assertions while doing nothing useful would pass.
+- **Nothing here replaces opening the page and using it.** Keyboard-walk it, pinch-zoom it, try it with a screen reader. The scripts narrow the search space; they do not certify the result.
+
+When reporting results, say what was checked and by which tool, not "it works".
+
 ## Validation checklist
 
 - [ ] Both `:root` and `[data-theme="dark"]` define the same variable names; no color key is missing.
@@ -207,5 +243,7 @@ Treat it as a template: adapt selectors to the page under test, then keep it as 
 - [ ] `audit_keyboard.js` exits 0.
 - [ ] `dom_harness.js` reports no load-time exception.
 - [ ] `regression_tests.js` passes, adapted to the page under test.
+- [ ] `selfcheck.py` reports 13 / 13 when a checker was edited.
+- [ ] No empty `catch` swallowing an init block; no environment sniffing; no `tabindex` without `role`; no empty `aria-label`.
 - [ ] At least one `min-width` breakpoint exists and the wide layout was considered.
 - [ ] Viewport meta does not block zoom.

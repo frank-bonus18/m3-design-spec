@@ -483,9 +483,19 @@ global.confirm = function () { return true; };
 global.getSelection = function () {
   return { toString() { return ''; }, removeAllRanges() {}, addRange() {} };
 };
+// 用真实浏览器的 UA：把 UA 设成 'node' 等于主动告诉页面「你在被测试」，
+// 任何 `navigator.userAgent === 'node'` 的判断都能据此改变行为。
+const HARness_UA =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 global.navigator = {
-  userAgent: 'node',
+  userAgent: HARness_UA,
+  platform: 'Linux armv8l',
+  language: 'zh-CN',
+  languages: ['zh-CN', 'zh'],
+  onLine: true,
   clipboard: { writeText() { return Promise.resolve(); } },
+  vibrate() { return true; },
 };
 
 /* 观察器桩：必须在执行页面脚本之前注入 */
@@ -519,13 +529,17 @@ function load(pagePath) {
   const scriptMatch = SRC.match(/<script[^>]*>([\s\S]*?)<\/script>/);
   if (scriptMatch) {
     try {
+      // 把 Node 专有的全局遮蔽成 undefined，页面无法靠 typeof process 之类
+      // 判断自己跑在测试里。缺了这些，环境嗅探几乎不需要成本。
       new Function(
         'window', 'document', 'requestAnimationFrame', 'performance',
         'setTimeout', 'clearTimeout', 'FileReader', 'Image', 'URL', 'Blob', 'navigator',
+        'process', 'require', 'module', 'exports', '__dirname', '__filename', 'global',
         scriptMatch[1]
       )(
         win, doc, win.requestAnimationFrame, global.performance, setTimeout, clearTimeout,
-        global.FileReader, global.Image, global.URL, global.Blob, global.navigator
+        global.FileReader, global.Image, global.URL, global.Blob, global.navigator,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined
       );
     } catch (e) {
       loadError = e;

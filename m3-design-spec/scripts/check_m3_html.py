@@ -271,6 +271,10 @@ def check_a11y(html_text, src, js):
     unnamed = []
     for btn in re.finditer(r"<button\b([^>]*)>(.*?)</button>", html_text, re.S | re.I):
         attrs, inner = btn.group(1), btn.group(2)
+        # 属性存在不等于有名字：aria-label="" 是空的，屏幕阅读器读不到东西
+        if re.search(r'aria-label\s*=\s*(""|\'\')', attrs, re.I):
+            unnamed.append(html_text.count("\n", 0, btn.start()) + 1)
+            continue
         if re.search(r"aria-label|aria-labelledby|\btitle\s*=", attrs, re.I):
             continue
         text = re.sub(r"<svg\b.*?</svg>", " ", inner, flags=re.S | re.I)
@@ -337,6 +341,168 @@ def check_a11y(html_text, src, js):
             f"(use inline SVG, or add aria-hidden/role=img): {shown}"
         )
     stats["emoji_offenders"] = len(offenders)
+
+    return problems, stats
+
+
+def _find_try_before(js, catch_pos):
+    """从 catch 位置向前找配对的 try{，返回 (起始位置, 体内字符数, 体内行数)。
+
+    用花括号深度回溯，不能靠正则——try 体里可能有嵌套的 {}。
+    """
+    depth = 0
+    i = catch_pos - 1
+    while i >= 0:
+        ch = js[i]
+        if ch == '}':
+            depth += 1
+        elif ch == '{':
+            if depth == 0:
+                # 找到 try 体的开括号，向前确认是 try
+                head = js[max(0, i - 12):i]
+                if re.search(r"try\s*$", head):
+                    body = js[i + 1:catch_pos - 1] if catch_pos > i else ''
+                    body = js[i + 1:]
+                    return i, len(body), body.count('\n')
+                depth = 0
+            else:
+                depth -= 1
+        i -= 1
+    return -1, 0, 0
+
+
+# 这些调用的抛错是良性的，包在空 catch 里无所谓
+BENIGN_IN_CATCH = re.compile(
+    r"^\s*(?:[\w.]+\.)?(focus|blur|setPointerCapture|releasePointerCapture|"
+    r"setSelectionRange|select|remove|scrollIntoView|writeText|execCommand)\s*\(",
+    re.S,
+)
+
+# 只在输出页里扫，不扫工具自身
+SNIFF_PATTERNS = [
+    (r"userAgent", "读取 navigator.userAgent 判断环境"),
+    (r"typeof\s+process", "用 typeof process 判断 Node 环境"),
+    (r"process\s*\.\s*env", "读取 process.env"),
+    (r"\bM3_PAGE\b", "引用测试专用环境变量 M3_PAGE"),
+    (r"\bM3_VERBOSE\b", "引用测试专用环境变量 M3_VERBOSE"),
+    (r"dom_harness", "引用测试工具 dom_harness"),
+    (r"__harness__", "引用 harness 标记"),
+]
+
+# 全小写：HTMLParser 给的 tag 是小写，比较时必须同大小写
+NATIVE_INTERACTIVE = {"button", "a", "input", "select", "textarea", "summary", "details"}
+NON_INTERACTIVE = {"div", "span", "p", "li", "td", "section", "article", "label"}
+
+
+# 这些角色本身就允许「内部有可聚焦子元素但子元素自己没有 role」，
+# 例如 role=treeitem 包住 .m3-tree-row。role=dialog 不在此列——
+# 弹窗是容器，不是可聚焦项的宿主，不能用来给内部 div 背书。
+FOCUSABLE_HOST_ROLES = {
+    "treeitem", "row", "gridcell", "columnheader", "rowheader",
+    "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab",
+}
+
+
+class RoleFinder(HTMLParser):
+    """记录每个元素的 role 与祖先 role，判断 tabindex 有没有语义支撑。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []          # [(tag, role, line)]
+        self.fake = []
+
+    def handle_starttag(self, tag, attrs):
+        low = tag.lower()
+        if low in VOID_TAGS:
+            return
+        d = dict(attrs)
+        role = (d.get("role") or "").strip().lower()
+        if low in NON_INTERACTIVE and str(d.get("tabindex", "")) == "0":
+            if not role:
+                hosted = any(r in FOCUSABLE_HOST_ROLES for _, r, _ in self.stack)
+                if not hosted:
+                    self.fake.append(self.getpos()[0])
+        self.stack.append((low, role, self.getpos()[0]))
+
+    def handle_endtag(self, tag):
+        low = tag.lower()
+        if low in VOID_TAGS:
+            return
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == low:
+                del self.stack[i:]
+                break
+
+
+def check_cheats(js, html_text):
+    """识别「让检查通过但没有真正实现」的写法。
+
+    这不是完备的对抗手段。它把最常见、最省事的几种糊弄方式变成显式失败，
+    并配合 selfcheck.py 保证这些规则本身没有被悄悄削弱。
+    """
+    problems = []
+    stats = {}
+
+    # ① 用大面积 try-catch 包裹初始化，吞掉异常让运行时报「无异常」
+    suspicious = []
+    benign = 0
+    for m in re.finditer(r"catch\s*\([^)]*\)\s*\{", js):
+        body_start = m.end() - 1
+        # 找 catch 体的闭合
+        depth, j = 0, body_start
+        while j < len(js):
+            if js[j] == '{':
+                depth += 1
+            elif js[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        body = js[body_start + 1:j]
+        stripped = re.sub(r"/\*.*?\*/|//[^\n]*", "", body, flags=re.S).strip()
+        if stripped:
+            continue                                   # catch 里有实际处理，不算吞
+        pos, size, lines = _find_try_before(js, m.start())
+        if pos < 0:
+            continue
+        try_body = js[pos + 1:m.start() - 1] if m.start() > pos else ''
+        try_body = re.sub(r"/\*.*?\*/|//[^\n]*", "", try_body, flags=re.S).strip()
+        if BENIGN_IN_CATCH.match(try_body) and len(try_body) < 120:
+            benign += 1
+            continue
+        if size > 300 or lines > 6:
+            suspicious.append((js.count("\n", 0, pos) + 1, size, lines))
+
+    stats["swallowed_catch"] = len(suspicious)
+    stats["benign_catch"] = benign
+    if suspicious:
+        shown = "; ".join(f"行{ln}（{size} 字符/{lines} 行）" for ln, size, lines in suspicious[:8])
+        problems.append(
+            f"{len(suspicious)} 处 try 块被空 catch 吞掉，运行时检查会以为自己「无异常」："
+            f"{shown}。不要用 try-catch 包裹初始化逻辑来掩盖错误"
+        )
+
+    # ② 环境嗅探：代码会随「是否在测试中」改变行为
+    hits = []
+    for pat, desc in SNIFF_PATTERNS:
+        for m in re.finditer(pat, js):
+            hits.append((js.count("\n", 0, m.start()) + 1, desc))
+    stats["env_sniffing"] = len(hits)
+    if hits:
+        detail = "; ".join(f"行{ln} {d}" for ln, d in hits[:8])
+        problems.append(f"{len(hits)} 处环境嗅探，代码会随「是否在测试中」改变行为：{detail}")
+
+    # ③ 假可交互：非原生控件加 tabindex=0，但自身和祖先都没有 role
+    finder = RoleFinder()
+    finder.feed(html_text)
+    fake = finder.fake
+    stats["fake_interactive"] = len(fake)
+    if fake:
+        shown = ", ".join(str(x) for x in fake[:10])
+        problems.append(
+            f"{len(fake)} 个 <div>/<span> 用 tabindex=\"0\" 冒充可聚焦，"
+            f"自身和祖先都没有 role，聚焦后读屏读不出它是什么（行 {shown}）"
+        )
 
     return problems, stats
 
@@ -435,6 +601,10 @@ def main():
     for p in resp_problems:
         findings.append(("responsive", p))
 
+    cheat_problems, cheat_stats = check_cheats(js, html_text)
+    for p in cheat_problems:
+        findings.append(("cheat", p))
+
     size_kb = len(src.encode()) / 1024
     print(f"file      : {args.path}")
     print(f"size      : {size_kb:.1f} KB, {src.count(chr(10)) + 1} lines")
@@ -445,6 +615,10 @@ def main():
           f"{a11y_stats.get('emoji_offenders', 0)} emoji violation(s)")
     bp = resp_stats.get("min_width_breakpoints") or []
     print(f"responsive: min-width breakpoints at {bp if bp else '— (phone-only layout)'}")
+    print(f"integrity : {cheat_stats.get('swallowed_catch', 0)} swallowed catch "
+          f"({cheat_stats.get('benign_catch', 0)} benign), "
+          f"{cheat_stats.get('env_sniffing', 0)} env sniffing, "
+          f"{cheat_stats.get('fake_interactive', 0)} fake interactive")
 
     if args.verbose:
         print()
