@@ -434,6 +434,53 @@ class RoleFinder(HTMLParser):
                 break
 
 
+# 至少要有的东西。数字不是为了严格，是为了挡住「空壳 + 正确外壳」。
+MIN_BUTTONS = 20
+MIN_SECTIONS = 4
+MIN_CLASSES = 30
+MIN_SVG = 5
+MIN_TEXT_RUNS = 40
+
+
+def check_substance(html_text):
+    """检查页面真的有内容，而不是拿一个漂亮的外壳骗过结构检查。
+
+    结构检查只问「有没有 skip-link、有没有令牌、有没有 aria-live」，
+    一个 280 字节的空壳全都能满足。这里数的是实打实的产出。
+    """
+    problems = []
+    stats = {}
+
+    buttons = len(re.findall(r"<button\b", html_text, re.I))
+    sections = len(re.findall(r"<section\b", html_text, re.I))
+    svgs = len(re.findall(r"<svg\b", html_text, re.I))
+
+    classes = set()
+    for chunk in re.findall(r'class="([^"]*)"', html_text):
+        classes.update(c for c in chunk.split() if c)
+    m3_classes = {c for c in classes if c.startswith("m3-")}
+
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", "", text)
+    text_len = len(text)
+
+    stats.update(buttons=buttons, sections=sections, svgs=svgs,
+                 m3_classes=len(m3_classes), text_chars=text_len)
+
+    if buttons < MIN_BUTTONS:
+        problems.append(f"只有 {buttons} 个 <button>（至少 {MIN_BUTTONS}）：页面结构不足以称为组件库")
+    if sections < MIN_SECTIONS:
+        problems.append(f"只有 {sections} 个 <section>（至少 {MIN_SECTIONS}）")
+    if len(m3_classes) < MIN_CLASSES:
+        problems.append(f"只有 {len(m3_classes)} 个 m3-* 类（至少 {MIN_CLASSES}）")
+    if svgs < MIN_SVG:
+        problems.append(f"只有 {svgs} 个内联 <svg>（至少 {MIN_SVG}）")
+    if text_len < MIN_TEXT_RUNS:
+        problems.append(f"可见文字只有 {text_len} 个字符（至少 {MIN_TEXT_RUNS}）：页面可能是空壳")
+    return problems, stats
+
+
 def check_cheats(js, html_text):
     """识别「让检查通过但没有真正实现」的写法。
 
@@ -601,6 +648,10 @@ def main():
     for p in resp_problems:
         findings.append(("responsive", p))
 
+    substance_problems, substance_stats = check_substance(html_text)
+    for p in substance_problems:
+        findings.append(("substance", p))
+
     cheat_problems, cheat_stats = check_cheats(js, html_text)
     for p in cheat_problems:
         findings.append(("cheat", p))
@@ -615,6 +666,10 @@ def main():
           f"{a11y_stats.get('emoji_offenders', 0)} emoji violation(s)")
     bp = resp_stats.get("min_width_breakpoints") or []
     print(f"responsive: min-width breakpoints at {bp if bp else '— (phone-only layout)'}")
+    print(f"substance : {substance_stats.get('buttons', 0)} buttons, "
+          f"{substance_stats.get('sections', 0)} sections, "
+          f"{substance_stats.get('m3_classes', 0)} m3-* classes, "
+          f"{substance_stats.get('text_chars', 0)} chars of text")
     print(f"integrity : {cheat_stats.get('swallowed_catch', 0)} swallowed catch "
           f"({cheat_stats.get('benign_catch', 0)} benign), "
           f"{cheat_stats.get('env_sniffing', 0)} env sniffing, "

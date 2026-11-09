@@ -97,6 +97,23 @@ def mut_fake_tabindex(src):
         '<div class="m3-list-item m3-ripple-surface" data-sheet="复制链接" tabindex="0">', 1)
 
 
+def mut_hollow_shell(src):
+    """把页面掏空成只剩最外层壳：结构检查全满足，但没有任何内容。"""
+    import re
+    head = re.search(r'(<!DOCTYPE.*?<body[^>]*>)', src, re.S)
+    if not head:
+        return src
+    return head.group(1) + """
+<a class="skip-link" href="#mainContent">跳到主要内容</a>
+<div class="lib"><div class="container" id="mainContent" role="main" tabindex="-1"></div></div>
+<div class="m3-scrim" id="scrim" role="dialog" aria-modal="true"></div>
+<div class="sr-only" role="status" aria-live="polite"></div>
+<script>
+document.addEventListener('pointerdown', function(e){ /* RIPPLE_SELECTOR */ }, {passive:true});
+</script>
+</body></html>"""
+
+
 def mut_break_js(src):
     return src.replace('var RIPPLE_SELECTOR = [', 'var RIPPLE_SELECTOR = [[', 1)
 
@@ -124,6 +141,7 @@ MUTATIONS = [
     ('用空 catch 吞掉初始化异常',   'static',   mut_swallow_catch),
     ('按 userAgent 嗅探测试环境',   'static',   mut_env_sniff),
     ('div 加 tabindex 冒充可聚焦',  'static',   mut_fake_tabindex),
+    ('空壳页面（结构对但没内容）',   'static',   mut_hollow_shell),
     ('破坏 JS 语法',                'harness',  mut_break_js),
     ('可点击但不可聚焦的 div',      'audit',    mut_clickable_div),
     ('删掉日期格的 roving tabindex', 'regress', mut_break_date_roving),

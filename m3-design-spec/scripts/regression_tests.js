@@ -45,6 +45,29 @@ function ok(name, cond, extra) {
     console.log('  FAIL ' + name + (extra === undefined ? '' : '  → ' + extra));
   }
 }
+
+// 断言块执行器：捕获异常记为失败并继续，而不是整份测试崩掉。
+// 崩溃比失败更糟——它只告诉你「有问题」，不告诉你坏在哪。
+function section(title, fn) {
+  if (process.env.M3_VERBOSE) console.log('\n== ' + title + ' ==');
+  try {
+    fn();
+  } catch (e) {
+    failed++;
+    console.log('  FAIL [' + title + '] 断言块抛异常 · ' + e.message);
+  }
+}
+
+// 给需要元素的断言用：元素不存在时直接记失败，返回 null
+function need(sel, label) {
+  const el = doc.querySelector(sel);
+  if (!el) {
+    failed++;
+    console.log('  FAIL 缺少必要元素 ' + sel + (label ? ' (' + label + ')' : ''));
+    return null;
+  }
+  return el;
+}
 function group(title) {
   if (process.env.M3_VERBOSE) console.log('\n== ' + title + ' ==');
 }
@@ -64,8 +87,7 @@ function allEls() {
 }
 
 /* ---------------------------------------------------------------- */
-group('主题');
-(function () {
+section('主题', function () {
   const toggle = doc.querySelector('#themeToggle');
   ok('主题开关存在', !!toggle);
   if (!toggle) return;
@@ -75,20 +97,18 @@ group('主题');
   toggle.checked = false;
   fire(toggle, 'change', { target: toggle });
   ok('取消后移除 data-theme', !doc.documentElement.hasAttribute('data-theme'));
-})();
+});
 
-group('跳转链接与主内容');
-(function () {
+section('跳转链接与主内容', function () {
   const skip = doc.querySelector('.skip-link');
   ok('跳转链接存在', !!skip);
   ok('指向 mainContent', skip && skip.getAttribute('href') === '#mainContent',
     skip && skip.getAttribute('href'));
   const main = doc.querySelector('#mainContent');
   ok('主内容可聚焦', main && main.getAttribute('tabindex') === '-1');
-})();
+});
 
-group('覆盖层');
-(function () {
+section('覆盖层', function () {
   const scrim = doc.querySelector('#scrim');
   ok('遮罩存在', !!scrim);
 
@@ -125,10 +145,9 @@ group('覆盖层');
     if (apply) apply.click();
     ok('应用后关闭', !doc.querySelector('#sideSheet').classList.contains('show'));
   }
-})();
+});
 
-group('反馈');
-(function () {
+section('反馈', function () {
   const snack = allEls().filter(el => el.getAttribute && el.getAttribute('data-snack'))[0];
   ok('有 data-snack 触发点', !!snack);
   if (snack) {
@@ -143,10 +162,9 @@ group('反馈');
     const active = stack._children.filter(c => !c.classList.contains('leaving')).length;
     ok('活动通知不超过 3 条', active <= 3, active);
   }
-})();
+});
 
-group('数字步进器');
-(function () {
+section('数字步进器', function () {
   const num = doc.querySelector('#num1');
   ok('步进器存在', !!num);
   if (!num) return;
@@ -162,10 +180,9 @@ group('数字步进器');
   dec.click();
   dec.click();
   ok('连减两次', parseInt(input.value, 10) === before - 1, input.value);
-})();
+});
 
-group('日期选择器键盘');
-(function () {
+section('日期选择器键盘', function () {
   const grid = doc.querySelector('#dpGrid');
   ok('日历存在', !!grid);
   if (!grid) return;
@@ -190,10 +207,9 @@ group('日期选择器键盘');
   ok('PageUp 翻月', doc.querySelector('#dpTitle').textContent !== month);
   fire(grid, 'keydown', { key: 'PageDown', preventDefault() {} });
   ok('PageDown 翻回', doc.querySelector('#dpTitle').textContent === month);
-})();
+});
 
-group('时间选择器');
-(function () {
+section('时间选择器', function () {
   const dial = doc.querySelector('#tpDial');
   ok('表盘存在', !!dial);
   if (!dial) return;
@@ -209,10 +225,9 @@ group('时间选择器');
   const before = hourEl.textContent;
   fire(dial, 'keydown', { key: 'ArrowUp', preventDefault() {} });
   ok('方向键调小时', hourEl.textContent !== before, hourEl.textContent);
-})();
+});
 
-group('下拉 / 多选');
-(function () {
+section('下拉 / 多选', function () {
   const sel = doc.querySelector('#select1');
   ok('下拉存在', !!sel);
   if (sel) {
@@ -237,10 +252,9 @@ group('下拉 / 多选');
     ok('方向键可打开', ms.classList.contains('open'));
     ok('有多选项', byClass(ms, 'm3-ms-option').length > 1);
   }
-})();
+});
 
-group('表单');
-(function () {
+section('表单', function () {
   const tagInput = doc.querySelector('#tagInput');
   ok('标签输入存在', !!tagInput);
   if (tagInput) {
@@ -281,10 +295,9 @@ group('表单');
       ok('输入框移除', !ie.querySelector('input'));
     }
   }
-})();
+});
 
-group('登录表单');
-(function () {
+section('登录表单', function () {
   const form = doc.querySelector('#loginForm');
   ok('登录表单存在', !!form);
   if (!form) return;
@@ -316,10 +329,9 @@ group('登录表单');
     toggle.click();
     ok('切回密文', pw.type === 'password', pw.type);
   }
-})();
+});
 
-group('手势');
-(function () {
+section('手势', function () {
   const list = doc.querySelector('#swipeList');
   ok('滑动列表存在', !!list);
   if (list) {
@@ -336,32 +348,48 @@ group('手势');
   const sortable = doc.querySelector('#sortable');
   ok('排序列表存在', !!sortable);
   if (sortable) ok('有拖拽手柄', byClass(sortable, 'drag-handle').length > 0);
-})();
+});
 
-group('键盘');
-(function () {
+section('键盘', function () {
+  // 不只看接口在不在，要看调用之后 DOM 真的变了。
+  // 伪造一个 `invoke: () => true` 曾能骗过全部断言。
   ok('m3Keys 已暴露', !!window.m3Keys);
   if (window.m3Keys) {
     const cmds = window.m3Keys.commands;
-    ok('命令数 > 10', cmds.length > 10, cmds.length);
-    ok('每条结构完整',
-      cmds.every(c => c.id && c.group && c.label && c.keys && c.keys.length));
-    ok('format 可用', window.m3Keys.format('cmdk') === 'Ctrl + K',
-      window.m3Keys.format('cmdk'));
+    ok('命令数 > 10', Array.isArray(cmds) && cmds.length > 10,
+      cmds && cmds.length);
+    ok('每条结构完整', Array.isArray(cmds) &&
+      cmds.every(c => c && c.id && c.group && c.label && c.keys && c.keys.length));
 
-    const before = doc.documentElement.hasAttribute('data-theme');
-    const okRun = window.m3Keys.invoke('theme');
-    const after = doc.documentElement.hasAttribute('data-theme');
-    ok('invoke 可执行并改变状态', okRun === true && before !== after);
+    // format 必须真的读注册表，而不是返回硬编码字符串
+    const fmt = window.m3Keys.format ? window.m3Keys.format('cmdk') : null;
+    const realCmd = Array.isArray(cmds) ? cmds.find(c => c.id === 'cmdk') : null;
+    const expect = realCmd ? realCmd.keys.join(' + ') : null;
+    ok('format 与注册表一致', fmt !== null && fmt === expect,
+      'format=' + fmt + ' 期望=' + expect);
+
+    // invoke 必须产生真实副作用：切主题要让 <html> 的 data-theme 变化
+    const hadDark = doc.documentElement.hasAttribute('data-theme');
+    const r1 = window.m3Keys.invoke('theme');
+    const nowDark = doc.documentElement.hasAttribute('data-theme');
+    const themeCmd = Array.isArray(cmds) ? cmds.find(c => c.id === 'theme') : null;
+    ok('invoke("theme") 真的改了 data-theme',
+      r1 === true && hadDark !== nowDark && !!themeCmd,
+      '返回=' + r1 + ' 前=' + hadDark + ' 后=' + nowDark);
+    if (hadDark !== nowDark) window.m3Keys.invoke('theme');   // 复原
+
     ok('未知命令返回 false', window.m3Keys.invoke('nope') === false);
 
-    window.m3Keys.open();
-    const scrim = doc.querySelector('#keysScrim');
-    ok('帮助浮层可打开', scrim.classList.contains('show'));
-    ok('渲染了快捷键行',
-      byClass(doc.querySelector('#keysGroups'), 'm3-keys-row').length === cmds.length);
-    window.m3Keys.close();
-    ok('帮助浮层可关闭', !scrim.classList.contains('show'));
+    // 打开帮助必须真的插入快捷键行
+    const kp = doc.querySelector('#keysScrim');
+    const rowsBefore = kp ? byClass(kp, 'm3-keys-row').length : -1;
+    if (window.m3Keys.open) window.m3Keys.open();
+    const rowsAfter = kp ? byClass(kp, 'm3-keys-row').length : -1;
+    ok('帮助浮层真的渲染了行', kp !== null && kp.classList.contains('show') &&
+      rowsAfter > 0 && rowsAfter === (Array.isArray(cmds) ? cmds.length : -1),
+      '打开前=' + rowsBefore + ' 打开后=' + rowsAfter + ' 命令数=' + (cmds && cmds.length));
+    if (window.m3Keys.close) window.m3Keys.close();
+    ok('帮助浮层可关闭', kp && !kp.classList.contains('show'));
   }
 
   const cmdkScrim = doc.querySelector('#cmdkScrim');
@@ -386,10 +414,9 @@ group('键盘');
     window.closeCmdk();
     ok('命令面板可关闭', !cmdkScrim.classList.contains('show'));
   }
-})();
+});
 
-group('组合控件键盘');
-(function () {
+section('组合控件键盘', function () {
   const heads = byClass(doc, 'm3-expansion-head');
   ok('折叠面板存在', heads.length > 1, heads.length);
   if (heads.length > 1) {
@@ -431,10 +458,9 @@ group('组合控件键盘');
     fire(group0[0], 'keydown', { key: 'ArrowRight', preventDefault() {} });
     ok('chip 方向键（事件委托）', doc.activeElement === group0[1]);
   }
-})();
+});
 
-group('规范可视化');
-(function () {
+section('规范可视化', function () {
   const grid = doc.querySelector('#swatchGrid');
   ok('色板网格存在', !!grid);
   if (grid) {
@@ -444,15 +470,49 @@ group('规范可视化');
     ok('有对比度角标', byClass(grid, 'm3-swatch-badge').length === 12);
   }
 
+  // 纯函数最容易被硬编码伪造。用多组独立可算的真值交叉验证：
+  // 任何一个 `return 21` 的假实现最多只对上一行。
   ok('m3Contrast 已暴露', !!window.m3Contrast);
   if (window.m3Contrast) {
-    ok('黑白 = 21:1', Math.abs(window.m3Contrast.ratio('#000000', '#FFFFFF') - 21) < 0.01,
-      window.m3Contrast.ratio('#000000', '#FFFFFF'));
-    ok('同色 = 1:1', Math.abs(window.m3Contrast.ratio('#123456', '#123456') - 1) < 0.001);
+    const CASES = [
+      ['#000000', '#FFFFFF', 21.00],
+      ['#FFFFFF', '#000000', 21.00],
+      ['#123456', '#123456', 1.00],
+      ['#0058A8', '#FFFFFF', 7.09],
+      ['#777777', '#FFFFFF', 4.48],
+      ['#A3C8FF', '#111418', 10.78],   // 独立用 sRGB 公式算出的真值
+    ];
+    CASES.forEach(([a, b, want]) => {
+      const got = window.m3Contrast.ratio(a, b);
+      ok(`对比度 ${a}/${b} = ${want}`, Math.abs(got - want) < 0.06,
+        '得到 ' + (typeof got === 'number' ? got.toFixed(2) : got));
+    });
+
+    // 对称性：ratio(a,b) 必须等于 ratio(b,a)
+    ok('对比度对称', Math.abs(
+      window.m3Contrast.ratio('#0058A8', '#FFFFFF') -
+      window.m3Contrast.ratio('#FFFFFF', '#0058A8')) < 1e-9);
+
+    // 分级必须随输入变化，不能返回常量
+    const grades = [1.5, 3.5, 5.0, 8.0].map(r => window.m3Contrast.grade(r));
+    ok('grade 随输入变化',
+      new Set(grades.map(g => `${g.aa}${g.aaa}${g.large}`)).size >= 3,
+      grades.map(g => `${g.aa}/${g.aaa}/${g.large}`).join(' '));
     const g = window.m3Contrast.grade(7.2);
     ok('grade(7.2) 三项全过', g.aa && g.aaa && g.large);
     const g2 = window.m3Contrast.grade(3.5);
     ok('grade(3.5) 仅大字过', !g2.aa && !g2.aaa && g2.large);
+    const g3 = window.m3Contrast.grade(1.5);
+    ok('grade(1.5) 全不通过', !g3.aa && !g3.aaa && !g3.large);
+
+    // luminance 也要真的算：#000 是 0，#fff 是 1，中间值单调
+    const L = window.m3Contrast.luminance;
+    if (typeof L === 'function') {
+      ok('黑亮度 = 0', Math.abs(L('#000000')) < 1e-6, L('#000000'));
+      ok('白亮度 = 1', Math.abs(L('#FFFFFF') - 1) < 1e-6, L('#FFFFFF'));
+      ok('亮度单调递增',
+        L('#000000') < L('#333333') && L('#333333') < L('#999999') && L('#999999') < L('#FFFFFF'));
+    }
   }
 
   const fg = doc.querySelector('#cFg');
@@ -521,10 +581,9 @@ group('规范可视化');
       doc.querySelector('#kcResult').textContent);
     ok('退出录制态', !kc.classList.contains('listening'));
   }
-})();
+});
 
-group('缩放自适应');
-(function () {
+section('缩放自适应', function () {
   ok('m3Zoom 始终暴露', !!window.m3Zoom);
   if (window.m3Zoom) {
     const st = window.m3Zoom.state();
@@ -533,10 +592,9 @@ group('缩放自适应');
     ok('未缩放时不误加 data-zoom-out',
       !doc.documentElement.hasAttribute('data-zoom-out'));
   }
-})();
+});
 
-group('动态重建后键盘支持仍在');
-(function () {
+section('动态重建后键盘支持仍在', function () {
   const inbox = doc.querySelector('#inbox');
   ok('收件箱存在', !!inbox);
   if (inbox) {
@@ -550,7 +608,7 @@ group('动态重建后键盘支持仍在');
         chips.filter(c => c.getAttribute('tabindex') === null).length + ' 个丢失');
     }
   }
-})();
+});
 
 /* ---------------------------------------------------------------- */
 console.log('');
