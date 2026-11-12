@@ -21,6 +21,42 @@ Produce Material 3 UI as one self-contained HTML file: inline `<style>`, inline 
 
 Name the artifact with a `.html` extension and keep it openable by double-click (`file://`).
 
+## Start here — run the checker now
+
+Before writing a single line, run this once so you know what green looks like:
+
+```bash
+/skills/m3-design-spec/scripts/check.sh
+```
+
+It takes ~12 seconds and prints:
+
+```
+  ✓ 静态校验 291 个按钮 · 261 个组件类
+  ✓ 运行时 3065 个元素
+  ✓ 键盘审计 无不可达目标（7 个期望例外）
+  ✓ 行为回归 通过 138 项
+结果: ✅ 全部通过（12s）
+```
+
+That is the target. Anything you build has to produce the same four lines.
+
+## You have not finished until check.sh is green
+
+This is the rule that matters most, because it is the one that gets skipped.
+
+```bash
+/skills/m3-design-spec/scripts/check.sh path/to/page.html
+```
+
+- **Do not say "done", "finished", "ready" or "it works" unless `check.sh` printed `✅` in this same turn.** Paste its output. A summary without the output is an unverified claim.
+- Run it **after each round of edits**, not once at the very end. The whole point is catching problems while the change is still small.
+- If it fails, fix and rerun. Never report partial success as success, and never describe failures as "minor".
+- Exit code `2` means a dependency is missing — say that explicitly. **"Not checked" must never be allowed to look like "checked and passed".**
+- Run `selfcheck.py` after editing anything in `scripts/`. It mutation-tests the checkers themselves; if a rule was quietly weakened, it goes red.
+
+If you skip the checker, you are guessing. The user will find out.
+
 ## Non-negotiable rules
 
 1. **Never hardcode a color in a component rule.** Every value must be `var(--token)`. One hardcoded hex breaks dark mode. Colors inside a decorative `gradient()` are the sole exception.
@@ -32,19 +68,21 @@ Name the artifact with a `.html` extension and keep it openable by double-click 
 7. **Global transition** on `background-color`, `color`, `border-color`, `box-shadow` so theme switching fades instead of snapping.
 8. Use `<button>` and `<input>` for interaction so keyboard access and focus rings work without extra code.
 9. **Never use an emoji as a functional icon.** Icons are inline `<svg>` with `fill="currentColor"`. This applies to your own output, not just to what you ask the user for. An emoji is acceptable only as decoration — a card media placeholder or an empty-state illustration — and even then it needs `aria-hidden="true"`, or `role="img"` plus `aria-label` if it carries meaning. Never inside a `<button>`, a menu item, a list leading slot, or any control.
+10. **Ship substance, not structure.** A page that satisfies every structural check but contains nothing is a failure. The checker enforces minimums (≥20 buttons, ≥4 sections, ≥30 `m3-*` classes, ≥5 inline SVG, ≥40 characters of visible text); treat them as a floor, not a target.
 
 ## Workflow
 
-1. **Clarify only what you cannot infer.** Seed color, which components are needed, single page or library page, label language. If the user showed a reference file, reuse its structure.
-2. **Pick the starting point.**
+1. **Run `check.sh` once** on the reference implementation (see above) — know the baseline.
+2. **Clarify only what you cannot infer.** Seed color, which components are needed, single page or library page, label language. If the user showed a reference file, reuse its structure.
+3. **Pick the starting point.**
    - New page → follow the structure below and write the token block yourself.
    - Extend an existing M3 page → edit it in place; do not re-scaffold.
    - Need a large library fast → copy the reference implementation, then edit:
      `cp /skills/m3-design-spec/assets/m3-component-library.html <workspace>/<name>.html`
-     It is ~11,000 lines; grep for the section you need instead of reading it whole.
-3. **Write the token block first**, then components, then interactions.
-4. **Validate** — run all four scripts (see Scripts). Fix everything they report.
-5. **Report** the file path, component list, and any deviation from M3.
+     It is ~11,000 lines; grep for the section you need instead of reading it whole. A section index lives in `references/components.md`.
+4. **Write the token block first**, then components, then interactions.
+5. **`check.sh` after each round of edits.** Fix, rerun, repeat until green.
+6. **Report** the file path, the component list, the `check.sh` output, and any deviation from M3.
 
 ## File structure to emit
 
@@ -130,29 +168,30 @@ Do not restate the token tables from memory; the values are exact and pairing-se
 
 ## Scripts
 
-Four scripts. Run all of them after every edit.
+One entry point. Run this, not the four tools individually:
 
-### Static check
-
-`/skills/m3-design-spec/scripts/check_m3_html.py`
-
-```
-python3 /skills/m3-design-spec/scripts/check_m3_html.py path/to/page.html [--verbose]
+```bash
+/skills/m3-design-spec/scripts/check.sh [page.html] [--verbose] [--json]
 ```
 
-Checks tag balance, duplicate `id`s, `<script>` syntax (when `node` exists), every id and class the JS references (runtime-created classes count as known), hex colors outside the token blocks, both token blocks with every semantic color mirrored (`theme-invariant` marks intentional constants), ripple presence, and accessibility blockers: missing `lang`, missing or dangling skip link, buttons with no accessible name, overlays without `role` / `aria-modal`, no live region, no reduced-motion fallback, no `:focus-visible`, emoji used as a functional icon. Also checks responsiveness: viewport present, zoom not blocked, at least one `min-width` breakpoint.
+12 seconds, four checks, one verdict. `--json` prints machine-readable status. Exit `0` pass, `1` findings, `2` missing dependency — **`2` is not a pass**.
 
-Exit 0 = clean, 1 = findings, 2 = unusable input.
+| # | Check | What it catches |
+|---|---|---|
+| 1 | `check_m3_html.py` | tags, ids, token blocks, hardcoded hex, a11y blockers, responsiveness, **substance minimums**, cheating patterns |
+| 2 | `dom_harness.js` | load-time exceptions, sync infinite loops, wrong interaction logic |
+| 3 | `audit_keyboard.js` | click targets a keyboard cannot reach |
+| 4 | `regression_tests.js` | 138 behaviour assertions across every component |
 
-### Runtime harness
+Plus `selfcheck.py`, which mutation-tests the checkers themselves (14 known defects). Run it after editing anything in `scripts/`:
 
-`/skills/m3-design-spec/scripts/dom_harness.js`
-
+```bash
+python3 /skills/m3-design-spec/scripts/selfcheck.py
 ```
-node /skills/m3-design-spec/scripts/dom_harness.js path/to/page.html
-```
 
-Parses the page's HTML into a minimal DOM, injects the browser APIs the script expects, and executes it. Catches load-time exceptions and lets you drive real clicks and pointer events:
+**When a check fails**, run the failing tool directly to see the full detail — `check.sh` truncates to keep the summary short. Each tool takes the page path as its only required argument.
+
+**Driving the page from a test**: `dom_harness.js` exports `doc` / `fire` / `loadError`, so you can require it and send real clicks and key events:
 
 ```js
 const H = require('/skills/m3-design-spec/scripts/dom_harness.js');
@@ -163,45 +202,6 @@ fire(doc.querySelector('#dpGrid'), 'keydown', { key:'ArrowRight', preventDefault
 ```
 
 `focus()` updates the shared `activeElement`, and `tabIndex` is a reflected property — both are required for keyboard assertions to mean anything.
-
-Limits: not a browser. Canvas is stubbed, layout is constant, observers are no-ops. Use it for logic, never for visuals.
-
-### Keyboard reachability audit
-
-`/skills/m3-design-spec/scripts/audit_keyboard.js`
-
-```
-node /skills/m3-design-spec/scripts/audit_keyboard.js path/to/page.html [--all]
-```
-
-Reports every element with a click listener that is not focusable. Expected exceptions: scrims and disabled buttons. Exit 0 = clean, 1 = findings, 2 = unusable input.
-
-### Behaviour regression suite
-
-`/skills/m3-design-spec/scripts/regression_tests.js`
-
-```
-node /skills/m3-design-spec/scripts/regression_tests.js path/to/page.html
-M3_VERBOSE=1 node /skills/m3-design-spec/scripts/regression_tests.js path/to/page.html
-```
-
-End-to-end assertions across theme switching, all overlay types (focus trap and `inert` included), snackbar and notification stacking, steppers, the date picker keyboard model, time picker drag and keys, select and multi-select, form widgets, the login form, gestures, the `m3Keys` registry and command palette, composite-widget keyboard rules, spec-visualisation widgets, zoom adaptation, and keyboard support surviving a dynamic re-render. Exit 0 = all pass, 1 = failures, 2 = page threw on load.
-
-Treat it as a template: adapt selectors to the page under test, then keep it as the smoke test.
-
-### Anti-tamper self-check
-
-`/skills/m3-design-spec/scripts/selfcheck.py`
-
-```
-python3 /skills/m3-design-spec/scripts/selfcheck.py [--verbose]
-```
-
-Mutation test for the checkers themselves. It applies 13 known defects — a dropped dark token, hardcoded hex, missing `min-width`, blocked zoom, missing skip link, emoji icon, empty `aria-label`, an empty `catch` swallowing init errors, environment sniffing, a `tabindex` with no role, broken JS, an unfocusable click target, broken date roving — and asserts the relevant checker fails on each. A clean baseline must pass all four.
-
-Run this whenever a checker is edited. If a rule is quietly removed, the mutation it used to catch will slip through and this script goes red. That is the only mechanism that keeps "PASS" meaningful over time.
-
-Exit 0 = every mutation caught and the baseline is clean. Exit 1 = something slipped through, meaning a rule was weakened.
 
 ## Do not game the checks
 

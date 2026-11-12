@@ -10,13 +10,13 @@
 **▶ [在线预览](https://frank-bonus18.github.io/m3-design-spec/)** — 不用下载，点开就能点。
 
 <p align="center">
-  <img src="docs/screenshots/light.png" width="240" alt="亮色模式">
-  <img src="docs/screenshots/dark.png" width="240" alt="暗色模式">
-  <img src="docs/screenshots/components.png" width="240" alt="选择控件">
+  <img src="docs/screenshots/light.webp" width="240" alt="亮色模式">
+  <img src="docs/screenshots/dark.webp" width="240" alt="暗色模式">
+  <img src="docs/screenshots/components.webp" width="240" alt="选择控件">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/desktop.png" width="720" alt="宽屏布局">
+  <img src="docs/screenshots/desktop.webp" width="720" alt="宽屏布局">
 </p>
 
 ---
@@ -103,31 +103,51 @@ m3-design-spec/references/tokens.md      # 72 个色值的表格，亮/暗双列
 
 ---
 
-## 四个工具
+## 一条命令跑完检查
 
 ```bash
-ASSET=m3-design-spec/assets/m3-component-library.html
-
-python3 m3-design-spec/scripts/check_m3_html.py "$ASSET"   # 静态校验
-node    m3-design-spec/scripts/dom_harness.js   "$ASSET"   # 运行时执行
-node    m3-design-spec/scripts/audit_keyboard.js "$ASSET"  # 键盘可达性
-node    m3-design-spec/scripts/regression_tests.js "$ASSET" # 129 项行为回归
+./m3-design-spec/scripts/check.sh
 ```
 
-预期输出：
+12 秒，四项检查，一行结论：
 
 ```
-result    : PASS — no findings
-结果      : ✅ 加载期无异常
-✅ 无未预期的不可聚焦点击目标
-✅ 全部通过
+检查 m3-design-spec/assets/m3-component-library.html
+
+  ✓ 静态校验 291 个按钮 · 261 个组件类
+  ✓ 运行时 3065 个元素
+  ✓ 键盘审计 无不可达目标（7 个期望例外）
+  ✓ 行为回归 通过 138 项
+结果: ✅ 全部通过（12s）
 ```
+
+失败时自动展开细节。也支持：
+
+```bash
+./check.sh path/to/page.html    # 检查指定页面
+./check.sh --verbose            # 总是展开每项输出
+./check.sh --json               # 机器可读，给 AI 或 CI 解析
+```
+
+退出码：`0` 通过 / `1` 有问题 / `2` **缺少依赖**。
+
+> `2` 不是通过。缺 node 或 python3 时脚本明确说「无法给出结论」，绝不让「没检查」看起来像「检查通过」。
+
+## 四项检查各自管什么
 
 ### `check_m3_html.py` — 静态校验
 
-标签闭合、`id` 唯一、JS 引用的 id/class 是否存在、令牌块外的硬编码颜色、两套令牌是否完整镜像、无障碍（`lang` / 跳转链接 / 按钮无障碍名 / 覆盖层 `role` / 实时播报区 / `prefers-reduced-motion` / `:focus-visible` / emoji 当图标）、响应式（viewport / 是否禁止缩放 / 是否有 `min-width` 断点）。
+标签闭合、`id` 唯一、JS 引用的 id/class 是否存在、令牌块外的硬编码颜色、两套令牌是否完整镜像、无障碍（`lang` / 跳转链接 / 按钮无障碍名 / 覆盖层 `role` / 实时播报区 / `prefers-reduced-motion` / `:focus-visible` / emoji 当图标）、响应式（viewport / 是否禁止缩放 / 是否有 `min-width` 断点），以及**内容门槛**：
 
-退出码：`0` 干净 / `1` 有问题 / `2` 输入不可用。
+| 指标 | 下限 |
+|---|---|
+| `<button>` | 20 |
+| `<section>` | 4 |
+| `m3-*` 类 | 30 |
+| 内联 `<svg>` | 5 |
+| 可见文字 | 40 字符 |
+
+这条是为了挡住「280 字节空壳 + 正确外壳」——它曾能让三项检查全绿。
 
 ### `dom_harness.js` — 运行时执行
 
@@ -150,9 +170,9 @@ fire(doc.querySelector('#dpGrid'), 'keydown', { key: 'ArrowRight', preventDefaul
 
 ### `regression_tests.js` — 行为回归
 
-主题切换、四类覆盖层（含焦点陷阱和 `inert`）、通知堆叠、步进器、日期选择器键盘模型、时间选择器拖动、下拉与多选、表单校验、手势、命令面板、组合控件键盘规则、规范可视化、缩放适配、动态重建后键盘支持是否还在。
+138 项断言：主题切换、四类覆盖层（含焦点陷阱和 `inert`）、通知堆叠、步进器、日期选择器键盘模型、时间选择器拖动、下拉与多选、表单校验、手势、命令面板、组合控件键盘规则、规范可视化、缩放适配、动态重建后键盘支持是否还在。
 
-可以当模板改选择器，用来测你自己生成的页面。
+每个断言块独立捕获异常 —— 某块崩了记为失败并继续，你会拿到完整的坏点清单而不是崩在第一处。
 
 ### `selfcheck.py` — 防止检查器被削弱
 
@@ -160,9 +180,7 @@ fire(doc.querySelector('#dpGrid'), 'keydown', { key: 'ArrowRight', preventDefaul
 python3 m3-design-spec/scripts/selfcheck.py
 ```
 
-对 13 种已知缺陷做变异测试，断言每个都被检出。规则被删掉时它立刻变红 —— 否则「检查通过」就是一句空话。
-
----
+对 **14 种**已知缺陷做变异测试，断言每个都被检出。规则被删掉时它立刻变红 —— 否则「检查通过」就是一句空话。
 
 ## 这些检查能不能被糊弄？
 
@@ -231,6 +249,7 @@ m3-design-spec/
 │   ├── components.md           298 个类的目录
 │   └── keyboard.md             键位表、roving tabindex、AI 接口
 ├── scripts/
+│   ├── check.sh                ★ 一条命令跑完下面四项
 │   ├── check_m3_html.py        静态校验
 │   ├── dom_harness.js          运行时执行
 │   ├── audit_keyboard.js       键盘可达性
@@ -266,19 +285,19 @@ m3-design-spec/
 
 ## 贡献
 
-欢迎提 issue 和 PR。改完代码请跑：
+欢迎提 issue 和 PR。改完代码跑一条命令：
 
 ```bash
-python3 m3-design-spec/scripts/check_m3_html.py m3-design-spec/assets/m3-component-library.html
-node    m3-design-spec/scripts/regression_tests.js m3-design-spec/assets/m3-component-library.html
+./m3-design-spec/scripts/check.sh
+```
+
+改了 `scripts/` 里的东西，再跑一次自检：
+
+```bash
 python3 m3-design-spec/scripts/selfcheck.py
 ```
 
-改了 `assets/m3-component-library.html` 后记得同步在线演示：
-
-```bash
-./tools/sync-docs.sh
-```
+两项都绿了再提交。CI 会做同样的事，跑不过会红。
 
 ## 许可
 
