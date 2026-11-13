@@ -114,6 +114,68 @@ document.addEventListener('pointerdown', function(e){ /* RIPPLE_SELECTOR */ }, {
 </body></html>"""
 
 
+def mut_non_hex_color(src):
+    """用 rgb()/hsl()/命名颜色硬编码，绕过只认 #hex 的检查。"""
+    return src.replace(
+        '.m3-card{',
+        '.m3-card{background:rgb(255,0,170);border-color:hsl(330 100% 50%);color:red;', 1)
+
+
+def mut_gradient_launder(src):
+    """在同一行放一个渐变，试图把硬编码颜色洗成 note。"""
+    return src.replace(
+        '.m3-card{',
+        '.m3-card{background:linear-gradient(#FFF,#000);border-color:#FF00AA;', 1)
+
+
+def mut_uppercase_script(src):
+    """把 <script> 写成 <SCRIPT>，同时注入空 catch。
+
+    HTML 里标签名大小写不敏感，浏览器照常执行；但如果检查器用
+    大小写敏感的正则提取脚本，就会完全看不见这段缺陷。
+    """
+    src = src.replace('.m3-card{', '.m3-card{color:#FF00AA;', 1)
+    out, n = [], 0
+    i = 0
+    while True:
+        j = src.find('<script', i)
+        if j < 0:
+            out.append(src[i:])
+            break
+        out.append(src[i:j])
+        out.append('<SCRIPT')
+        i = j + len('<script')
+        n += 1
+    src = ''.join(out).replace('</script>', '</SCRIPT>')
+    # 加一段空 catch，检查器若失明就看不到
+    return src.replace('</body>', '<SCRIPT>try{x()}catch(e){}</SCRIPT></body>', 1)
+
+
+def mut_padding_shell(src):
+    """把页面换成「每个门槛都恰好卡在线上」的空壳。
+
+    这正是审计样本的做法：20 个空按钮、4 段一模一样的话、5 个空 svg、
+    一堆 m3-fill-N 凑类名。数量检查全过，内容为零。
+    """
+    import re
+    head = re.search(r'(<!DOCTYPE.*?<body[^>]*>)', src, re.S)
+    if not head:
+        return src
+    fills = " ".join(f"m3-fill-{i}" for i in range(28))
+    secs = "".join(
+        f'<section class="m3-s{i}">这里没有任何真实内容，只是为了让字数越过门槛而已。</section>'
+        for i in range(4))
+    svgs = ('<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">'
+            '<path d="M0 0h8v8H0z"/></svg>') * 5
+    btns = "".join(f'<button type="button" aria-label="占位 {i}"></button>' for i in range(20))
+    return head.group(1) + f"""
+<a class="skip-link" href="#mainContent">跳到主要内容</a>
+<div id="mainContent" role="main" tabindex="-1" class="{fills}">{secs}{svgs}{btns}</div>
+<div class="m3-scrim" id="scrim" role="dialog" aria-modal="true"></div>
+<div class="sr-only" role="status" aria-live="polite"></div>
+</body></html>"""
+
+
 def mut_break_js(src):
     return src.replace('var RIPPLE_SELECTOR = [', 'var RIPPLE_SELECTOR = [[', 1)
 
@@ -142,6 +204,10 @@ MUTATIONS = [
     ('按 userAgent 嗅探测试环境',   'static',   mut_env_sniff),
     ('div 加 tabindex 冒充可聚焦',  'static',   mut_fake_tabindex),
     ('空壳页面（结构对但没内容）',   'static',   mut_hollow_shell),
+    ('rgb()/hsl()/命名颜色硬编码',  'static',   mut_non_hex_color),
+    ('同行渐变洗白硬编码颜色',      'static',   mut_gradient_launder),
+    ('<SCRIPT> 大写 + 空 catch',    'static',   mut_uppercase_script),
+    ('卡线空壳（数量够内容空）',    'static',   mut_padding_shell),
     ('破坏 JS 语法',                'harness',  mut_break_js),
     ('可点击但不可聚焦的 div',      'audit',    mut_clickable_div),
     ('删掉日期格的 roving tabindex', 'regress', mut_break_date_roving),
