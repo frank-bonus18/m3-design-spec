@@ -103,7 +103,7 @@ detail_of() {
     静态校验)
       local b c
       b=$(grep -oE '^substance : [0-9]+' "$out" | grep -oE '[0-9]+')
-      c=$(grep -oE '[0-9]+ m3-\* classes' "$out" | grep -oE '^[0-9]+')
+      c=$(grep -oE '[0-9]+ component classes' "$out" | grep -oE '^[0-9]+')
       echo "${b} 个按钮 · ${c} 个组件类" ;;
     运行时)   grep -oE '[0-9]+' <<<"$(grep '元素总数' "$out")" | head -1 | sed 's/$/ 个元素/' ;;
     键盘审计)

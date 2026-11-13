@@ -75,8 +75,8 @@ def split_regions(src):
     Style and script bodies are replaced by an equal number of newlines so a
     line number reported for markup matches the original file.
     """
-    styles = re.findall(r"<style[^>]*>(.*?)</style>", src, re.S)
-    scripts = re.findall(r"<script[^>]*>(.*?)</script>", src, re.S)
+    styles = re.findall(r"<style[^>]*>(.*?)</style>", src, re.S | re.I)
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", src, re.S | re.I)
     css = "\n".join(styles)
     js = "\n".join(scripts)
     body = src
@@ -117,24 +117,117 @@ def strip_token_blocks(css):
     return "".join(out)
 
 
-def check_hex_colors(css_after_tokens):
-    """Return (errors, notes).
+# 命名颜色（CSS 关键字）——只收常见、明确是颜色的，避免误伤 currentColor 等令牌
+NAMED_COLORS = {
+    "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown",
+    "black", "white", "gray", "grey", "silver", "gold", "navy", "teal",
+    "olive", "lime", "aqua", "fuchsia", "maroon", "crimson", "indigo",
+    "violet", "turquoise", "salmon", "khaki", "beige", "ivory", "coral",
+}
+# 这些写法都是硬编码颜色，必须走令牌
+FUNC_COLOR = re.compile(
+    r"\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^)]*\)", re.I)
 
-    Hex values that only appear inside a gradient are decorative artwork and are
-    reported as notes. Everything else must be a token, or it will not follow
-    the theme.
+# 只在「声明值」里找颜色，不在选择器/属性名里找
+DECL = re.compile(r":\s*([^;{}]+);")
+
+
+def _gradient_spans(text):
+    """返回所有 gradient(...) 的 [start, end) 区间，用于只豁免括号内部。"""
+    spans = []
+    for m in re.finditer(r"gradient\(\s*", text, re.I):
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append((m.start(), i + 1))
+                    break
+            i += 1
+    return spans
+
+
+def check_hex_colors(css_after_tokens):
+    """找令牌块外的硬编码颜色。
+
+    覆盖 #hex、rgb()/hsl()/oklch()/lab() 等函数式写法，以及 CSS 命名颜色。
+    渐变只豁免它自己的括号内部，同一行其它声明照样算违规。
+
+    返回 (errors, notes)。errors 是必须修的；notes 是可人工复核的。
     """
     cleaned = re.sub(r"url\([^)]*\)", "", css_after_tokens)
-    errors, notes = [], []
     lines = cleaned.splitlines()
+    spans = _gradient_spans(cleaned)
+    errors, notes = [], []
+
+    def in_gradient(pos):
+        return any(a <= pos < b for a, b in spans)
+
+    def line_of(pos):
+        return cleaned.count("\n", 0, pos) + 1
+
+    # 1) 十六进制
     for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", cleaned):
-        line = cleaned.count("\n", 0, m.start()) + 1
-        snippet = lines[line - 1].strip() if 0 < line <= len(lines) else ""
-        entry = (line, m.group(0), snippet[:100])
-        if "gradient(" in snippet:
+        ln = line_of(m.start())
+        snippet = lines[ln - 1].strip() if 0 < ln <= len(lines) else ""
+        entry = (ln, m.group(0), snippet[:100])
+        (notes if in_gradient(m.start()) else errors).append(entry)
+
+    # 2) 函数式颜色
+    # 「降级兜底」：同一属性如果另有 var()/color-mix() 版本，那这个字面量只是
+    # 给不支持新语法的浏览器兜底，写法正确。必须按声明切分，不能用
+    # `[^;]*` 跨声明匹配 —— 兜底写法本身就是两条同名声明。
+    def token_version_of(prop_name, block_text):
+        """同一属性（或它的 -color 等子属性）是否另有令牌版本。
+
+        允许前缀匹配：`border-left` 与 `border-left-color` 属于同一族，
+        用 `border-left-color:color-mix(...)` 兜 `border-left:1px solid rgba(...)`
+        是正确写法。
+        """
+        if not prop_name:
+            return False
+        for vm in re.finditer(r"(?:^|;)\s*([a-z-]+)\s*:\s*([^;]+)", block_text, re.I):
+            cand, val = vm.group(1).lower(), vm.group(2)
+            if not re.search(r"var\(|color-mix\(", val, re.I):
+                continue
+            p = prop_name.lower()
+            if cand == p or cand.startswith(p + "-") or p.startswith(cand + "-"):
+                return True
+        return False
+
+    for m in FUNC_COLOR.finditer(cleaned):
+        val = m.group(0)
+        if val.lower().startswith("color-mix"):
+            continue
+        ln = line_of(m.start())
+        snippet = lines[ln - 1].strip() if 0 < ln <= len(lines) else ""
+        block_start = cleaned.rfind("{", 0, m.start())
+        block_end = cleaned.find("}", m.start())
+        block = cleaned[block_start + 1:block_end] if 0 <= block_start < block_end else snippet
+        # 属性名要向前回溯到上一个 ; 或 { ，因为值可能很长
+        # 例：text-shadow:0 1px 3px rgba(...) —— 属性名后面跟着的是值
+        cut = max(cleaned.rfind(";", 0, m.start()),
+                  cleaned.rfind("{", 0, m.start()))
+        decl = cleaned[cut + 1:m.start()]
+        prop = re.match(r"\s*([a-z-]+)\s*:", decl, re.I)
+        prop_name = prop.group(1) if prop else None
+        entry = (ln, val[:40], snippet[:100])
+        if in_gradient(m.start()) or token_version_of(prop_name, block):
             notes.append(entry)
         else:
             errors.append(entry)
+
+    # 3) 命名颜色：只查声明值，避免 selector/属性名误伤
+    for m in DECL.finditer(cleaned):
+        value = m.group(1)
+        for word in re.findall(r"\b[a-z]+\b", value, re.I):
+            if word.lower() in NAMED_COLORS:
+                ln = line_of(m.start())
+                snippet = lines[ln - 1].strip() if 0 < ln <= len(lines) else ""
+                errors.append((ln, word, snippet[:100]))
+
     return errors, notes
 
 
@@ -434,50 +527,118 @@ class RoleFinder(HTMLParser):
                 break
 
 
-# 至少要有的东西。数字不是为了严格，是为了挡住「空壳 + 正确外壳」。
+# 内容门槛。不数"有多少个"，而数"有多少不同的、有意义的"。
+# 单纯提高数量下限没用：审计样本把每个阈值都恰好卡在线上
+# （20 个空按钮 / 4 段重复文本 / 5 个 8×8 空 svg / 28 个 m3-fill-N 凑类名）。
+MIN_UNIQUE_TEXT = 300      # 去重后的可见文字
 MIN_BUTTONS = 20
+MIN_BUTTONS_WITH_CONTENT = 15   # 至少有文字或有真实图形
+MIN_COMPONENT_CLASSES = 25      # 排除 m3-fill-N 这类凑数类
 MIN_SECTIONS = 4
-MIN_CLASSES = 30
+MIN_SECTIONS_WITH_HEADING = 3
 MIN_SVG = 5
-MIN_TEXT_RUNS = 40
+MIN_SVG_WITH_PATH = 5
 
 
 def check_substance(html_text):
     """检查页面真的有内容，而不是拿一个漂亮的外壳骗过结构检查。
 
-    结构检查只问「有没有 skip-link、有没有令牌、有没有 aria-live」，
-    一个 280 字节的空壳全都能满足。这里数的是实打实的产出。
+    三条思路：
+      1. 数「不同的」而不是「总数」——4 段一样的话只算 1 段；
+      2. 看元素「有没有实质」——空按钮、空 svg 不算；
+      3. 看类名「是不是组件」——m3-fill-0…27 这种是凑数，不是组件。
     """
     problems = []
     stats = {}
 
-    buttons = len(re.findall(r"<button\b", html_text, re.I))
-    sections = len(re.findall(r"<section\b", html_text, re.I))
-    svgs = len(re.findall(r"<svg\b", html_text, re.I))
+    # ---- 文字：去标签、去重、数不同字符 ----
+    text_blob = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text, flags=re.S | re.I)
+    text_blob = re.sub(r"<[^>]+>", "\n", text_blob)
+    lines = [re.sub(r"\s+", "", ln) for ln in text_blob.split("\n")]
+    lines = [ln for ln in lines if ln]
+    unique_lines = set(lines)
+    unique_chars = sum(len(ln) for ln in unique_lines)
+    stats["unique_text_chars"] = unique_chars
+    stats["text_lines"] = len(lines)
+    stats["unique_text_lines"] = len(unique_lines)
 
+    if unique_chars < MIN_UNIQUE_TEXT:
+        problems.append(
+            f"去重后的可见文字只有 {unique_chars} 字符（至少 {MIN_UNIQUE_TEXT}）；"
+            f"{len(lines)} 行文字里只有 {len(unique_lines)} 行不同——疑似重复内容凑数"
+        )
+
+    # ---- 按钮：要有实质内容 ----
+    btns = re.findall(r"<button\b([^>]*)>(.*?)</button>", html_text, re.S | re.I)
+    with_content = 0
+    for attrs, inner in btns:
+        label = re.search(r'aria-label\s*=\s*["\']([^"\']*)["\']', attrs, re.I)
+        if label and label.group(1).strip():
+            with_content += 1
+            continue
+        body = re.sub(r"<svg\b.*?</svg>", "", inner, flags=re.S | re.I)
+        body = re.sub(r"<[^>]+>", " ", body)
+        if body.strip():
+            with_content += 1
+            continue
+        # 图标按钮：必须有带 path 的真实 svg
+        svg = re.search(r"<svg\b[^>]*>(.*?)</svg>", inner, re.S | re.I)
+        if svg and re.search(r"<path\b[^>]*d\s*=\s*[\"'][^\"']{8,}", svg.group(1), re.I):
+            with_content += 1
+    stats["buttons"] = len(btns)
+    stats["buttons_with_content"] = with_content
+
+    if len(btns) < MIN_BUTTONS:
+        problems.append(f"只有 {len(btns)} 个 <button>（至少 {MIN_BUTTONS}）")
+    elif with_content < MIN_BUTTONS_WITH_CONTENT:
+        problems.append(
+            f"{len(btns)} 个按钮里只有 {with_content} 个有实际内容"
+            f"（文字或真实图标，至少 {MIN_BUTTONS_WITH_CONTENT}）——其余是空按钮"
+        )
+
+    # ---- 组件类：排除 m3-<词>-<数字> 这类编号凑数 ----
     classes = set()
     for chunk in re.findall(r'class="([^"]*)"', html_text):
-        classes.update(c for c in chunk.split() if c)
-    m3_classes = {c for c in classes if c.startswith("m3-")}
+        classes.update(c for c in chunk.split() if c.startswith("m3-"))
+    real_classes = {c for c in classes if not re.search(r"-[0-9]+$", c)}
+    stats["m3_classes"] = len(real_classes)
 
-    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", "", text)
-    text_len = len(text)
+    if len(real_classes) < MIN_COMPONENT_CLASSES:
+        problems.append(
+            f"只有 {len(real_classes)} 个有意义的 m3-* 类（至少 {MIN_COMPONENT_CLASSES}）；"
+            f"形如 m3-x-12 的编号类不计入"
+        )
 
-    stats.update(buttons=buttons, sections=sections, svgs=svgs,
-                 m3_classes=len(m3_classes), text_chars=text_len)
+    # ---- section：要有标题 ----
+    secs = re.findall(r'<section\b[^>]*>(.*?)</section>', html_text, re.S | re.I)
+    with_heading = 0
+    for body in secs:
+        if re.search(r'<h[1-6]\b|class="[^"]*(title|heading|section-title)', body, re.I):
+            with_heading += 1
+    stats["sections"] = len(secs) if secs else len(re.findall(r"<section\b", html_text, re.I))
+    stats["sections_with_heading"] = with_heading
 
-    if buttons < MIN_BUTTONS:
-        problems.append(f"只有 {buttons} 个 <button>（至少 {MIN_BUTTONS}）：页面结构不足以称为组件库")
-    if sections < MIN_SECTIONS:
-        problems.append(f"只有 {sections} 个 <section>（至少 {MIN_SECTIONS}）")
-    if len(m3_classes) < MIN_CLASSES:
-        problems.append(f"只有 {len(m3_classes)} 个 m3-* 类（至少 {MIN_CLASSES}）")
-    if svgs < MIN_SVG:
-        problems.append(f"只有 {svgs} 个内联 <svg>（至少 {MIN_SVG}）")
-    if text_len < MIN_TEXT_RUNS:
-        problems.append(f"可见文字只有 {text_len} 个字符（至少 {MIN_TEXT_RUNS}）：页面可能是空壳")
+    if stats["sections"] < MIN_SECTIONS:
+        problems.append(f"只有 {stats['sections']} 个 <section>（至少 {MIN_SECTIONS}）")
+    elif with_heading < MIN_SECTIONS_WITH_HEADING:
+        problems.append(
+            f"{stats['sections']} 个 section 里只有 {with_heading} 个有标题"
+            f"（至少 {MIN_SECTIONS_WITH_HEADING}）"
+        )
+
+    # ---- svg：要有真实图形 ----
+    svgs = re.findall(r"<svg\b[^>]*>(.*?)</svg>", html_text, re.S | re.I)
+    real_svgs = [b for b in svgs if re.search(r"<path\b[^>]*d\s*=\s*[\"'][^\"']{8,}", b, re.I)
+                 or re.search(r"<(circle|rect|line|polyline|polygon|ellipse|text)\b", b, re.I)]
+    stats["svgs"] = len(svgs)
+    stats["svgs_with_shape"] = len(real_svgs)
+
+    if len(real_svgs) < MIN_SVG_WITH_PATH:
+        problems.append(
+            f"只有 {len(real_svgs)} 个含真实图形的 <svg>（至少 {MIN_SVG_WITH_PATH}）；"
+            f"空 svg 不计入"
+        )
+
     return problems, stats
 
 
@@ -666,10 +827,11 @@ def main():
           f"{a11y_stats.get('emoji_offenders', 0)} emoji violation(s)")
     bp = resp_stats.get("min_width_breakpoints") or []
     print(f"responsive: min-width breakpoints at {bp if bp else '— (phone-only layout)'}")
-    print(f"substance : {substance_stats.get('buttons', 0)} buttons, "
+    print(f"substance : {substance_stats.get('buttons', 0)} buttons "
+          f"({substance_stats.get('buttons_with_content', 0)} with content), "
           f"{substance_stats.get('sections', 0)} sections, "
-          f"{substance_stats.get('m3_classes', 0)} m3-* classes, "
-          f"{substance_stats.get('text_chars', 0)} chars of text")
+          f"{substance_stats.get('m3_classes', 0)} component classes, "
+          f"{substance_stats.get('unique_text_chars', 0)} unique chars")
     print(f"integrity : {cheat_stats.get('swallowed_catch', 0)} swallowed catch "
           f"({cheat_stats.get('benign_catch', 0)} benign), "
           f"{cheat_stats.get('env_sniffing', 0)} env sniffing, "

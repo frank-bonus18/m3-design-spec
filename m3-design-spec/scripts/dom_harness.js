@@ -521,37 +521,80 @@ function load(pagePath) {
   PAGE = pagePath;
   SRC = fs.readFileSync(pagePath, 'utf8');
 
-  const bodyStart = SRC.indexOf('<body');
-  const bodyOpen = SRC.indexOf('>', bodyStart) + 1;
-  const bodySrc = SRC.slice(bodyOpen, SRC.lastIndexOf('<script'));
-  parseInto(bodySrc, bodyEl);
+  // H2：标签名大小写不敏感。<SCRIPT> / <STYLE> 在 HTML 里完全合法，
+  // 之前的 lastIndexOf('<script') 遇到大写会切错，整页 markup 丢失。
+  const scriptTags = [...SRC.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
 
-  const scriptMatch = SRC.match(/<script[^>]*>([\s\S]*?)<\/script>/);
-  if (scriptMatch) {
+  // body 范围：从 <body> 到第一个 script 的起点（大小写不敏感）
+  const bodyStart = SRC.search(/<body\b/i);
+  const bodyOpen = bodyStart >= 0 ? SRC.indexOf('>', bodyStart) + 1 : 0;
+  const firstScriptPos = scriptTags.length > 0
+    ? SRC.search(/<script\b/i)
+    : SRC.length;
+  const bodyEnd = firstScriptPos > bodyOpen ? firstScriptPos : SRC.length;
+  parseInto(SRC.slice(bodyOpen, bodyEnd), bodyEl);
+
+  // H1：按文档顺序执行**全部** script，而不是只执行第一个。
+  // 只执行第一个会让「前面插个空壳脚本」的页面在工具里变成死页，
+  // 而它在真实浏览器里正常运行。
+  for (let i = 0; i < scriptTags.length; i++) {
+    const code = scriptTags[i][1];
+    if (!code || !code.trim()) continue;
     try {
       // 把 Node 专有的全局遮蔽成 undefined，页面无法靠 typeof process 之类
-      // 判断自己跑在测试里。缺了这些，环境嗅探几乎不需要成本。
+      // 判断自己跑在测试里。
       new Function(
         'window', 'document', 'requestAnimationFrame', 'performance',
         'setTimeout', 'clearTimeout', 'FileReader', 'Image', 'URL', 'Blob', 'navigator',
         'process', 'require', 'module', 'exports', '__dirname', '__filename', 'global',
-        scriptMatch[1]
+        code
       )(
         win, doc, win.requestAnimationFrame, global.performance, setTimeout, clearTimeout,
         global.FileReader, global.Image, global.URL, global.Blob, global.navigator,
         undefined, undefined, undefined, undefined, undefined, undefined, undefined
       );
     } catch (e) {
-      loadError = e;
+      // 记录第一个失败，但继续执行后续脚本，尽量还原浏览器行为
+      if (!loadError) loadError = e;
+      else loadError.message += ' | 脚本 #' + (i + 1) + ': ' + e.message;
     }
   }
 }
 
 if (PAGE) load(PAGE);
 
+/* ---------- H5：页面应该长出多少东西 ---------- */
+/* 只报告「加载期无异常」是不够的：一个被掏空的页面同样不抛异常。
+   这里对关键结构做存在性断言，元素数量明显偏少时直接判失败。 */
+const MIN_EXPECT = {
+  totalElements: 500,     // 任何像样的组件库都远超这个数
+  buttons: 20,
+  sections: 4,
+};
+let substanceError = null;
+
+function checkSubstance() {
+  const all = queryAll(doc, '*');
+  const buttons = all.filter(e => e.tagName === 'BUTTON').length;
+  const sections = all.filter(e => e.tagName === 'SECTION').length;
+  const problems = [];
+  if (all.length < MIN_EXPECT.totalElements)
+    problems.push(`元素总数 ${all.length} < ${MIN_EXPECT.totalElements}`);
+  if (buttons < MIN_EXPECT.buttons)
+    problems.push(`<button> ${buttons} < ${MIN_EXPECT.buttons}`);
+  if (sections < MIN_EXPECT.sections)
+    problems.push(`<section> ${sections} < ${MIN_EXPECT.sections}`);
+  return {
+    total: all.length, buttons, sections,
+    ok: problems.length === 0,
+    problems,
+  };
+}
+
 module.exports = {
   doc, win, fire, El, loadError, bodyEl, queryAll, matchesSel,
   load, get pagePath() { return PAGE; },
+  checkSubstance, MIN_EXPECT,
 };
 
 /* 直接执行时，报告加载结果 */
@@ -568,5 +611,12 @@ if (require.main === module) {
     process.exit(1);
   }
   console.log('结果      : ✅ 加载期无异常');
-  console.log('元素总数  :', queryAll(doc, '*').length);
+
+  const sub = checkSubstance();
+  console.log('元素总数  :', sub.total, `(${sub.buttons} buttons, ${sub.sections} sections)`);
+  if (!sub.ok) {
+    console.log('内容下限  : ❌ ' + sub.problems.join('；'));
+    process.exit(1);
+  }
+  console.log('内容下限  : ✓');
 }

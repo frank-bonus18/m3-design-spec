@@ -382,8 +382,11 @@ button,input,select,textarea{font-family:inherit}
 .m3-split{display:inline-flex;border-radius:var(--radius-full);overflow:hidden;box-shadow:var(--shadow-1)}
 .m3-split .m3-btn{border-radius:0;box-shadow:none}
 .m3-split .m3-btn:first-child{padding-right:18px}
-.m3-split .m3-btn:last-child{padding:0 14px;border-left:1px solid rgba(255,255,255,.25)}
-.m3-split .m3-btn:last-child{border-left-color:color-mix(in srgb,var(--on-primary) 24%,transparent)}
+.m3-split .m3-btn:last-child{
+  padding:0 14px;
+  border-left:1px solid rgba(255,255,255,.25);
+  border-left-color:color-mix(in srgb,var(--on-primary) 24%,transparent);
+}
 
 /* --------------------------------------------------------------------------
    6. 卡片 Cards
@@ -1179,7 +1182,7 @@ button,input,select,textarea{font-family:inherit}
 .m3-swatch.selected{border-color:var(--on-surface);transform:scale(1.12)}
 .m3-swatch.selected::after{
   content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  color:var(--on-media);font-size:16px;text-shadow:0 1px 3px rgba(0,0,0,.5);
+  color:var(--on-media);font-size:16px;text-shadow:0 1px 3px rgba(0,0,0,.5);text-shadow:0 1px 3px color-mix(in srgb,var(--scrim) 50%,transparent);
 }
 .m3-swatch.custom{
   background:conic-gradient(#f44,#fd0,#0c6,#09f,#63f,#f44);
